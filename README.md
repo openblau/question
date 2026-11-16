@@ -36,3 +36,7 @@ The menu-bar icon also has **Open at Login** (on by default after first launch),
 ## Configuration
 
 Model and effort are set in `Sources/Question/ClaudeClient.swift` (`claude-opus-5-5`, effort `medium`). Web search (up to 5 searches per answer) and server-side refusal fallbacks are enabled there too.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
