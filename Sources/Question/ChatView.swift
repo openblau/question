@@ -111,7 +111,7 @@ struct ChatView: View {
             Button("New chat") { session.end(); onExpandedChange(false) }
                 .keyboardShortcut("n", modifiers: .command)
                 .buttonStyle(.plain)
-            Text("Nothing is saved")
+            Text("\(session.backend.label) · nothing is saved")
         }
         .font(.caption)
         .foregroundStyle(.tertiary)
@@ -130,11 +130,7 @@ private struct TurnView: View {
                 .textSelection(.enabled)
 
             if !turn.answer.isEmpty {
-                Text(markdown(turn.answer))
-                    .font(.system(size: 14))
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                MarkdownView(text: turn.answer)
             }
 
             if let status = turn.status, !turn.done {
@@ -165,12 +161,6 @@ private struct TurnView: View {
                 .font(.caption)
             }
         }
-    }
-
-    private func markdown(_ text: String) -> AttributedString {
-        (try? AttributedString(markdown: text,
-                               options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(text)
     }
 }
 

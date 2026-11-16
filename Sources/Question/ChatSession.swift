@@ -20,18 +20,41 @@ final class ChatSession {
     private(set) var turns: [Turn] = []
     private(set) var isBusy = false
     private(set) var apiKey: String?
+    private(set) var backend: Backend
     var focusTick = 0
+
+    /// Where answers come from: the user's Claude subscription (via Claude Code) or an API key.
+    enum Backend: String {
+        case subscription, apiKey
+        var label: String { self == .subscription ? "Claude subscription" : "API key" }
+    }
+
+    private static let backendKey = "backend"
 
     @ObservationIgnored private var history: [[String: Any]] = []
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var system = ChatSession.makeSystemPrompt()
+    @ObservationIgnored private var claudeCode: ClaudeCodeClient?
+    @ObservationIgnored private var generation = 0
 
     init() {
-        apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"].flatMap { $0.isEmpty ? nil : $0 }
+        let key = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"].flatMap { $0.isEmpty ? nil : $0 }
             ?? Keychain.read()
+        apiKey = key
+        // First launch: keep using a key that's already set up, otherwise prefer the subscription.
+        backend = UserDefaults.standard.string(forKey: Self.backendKey).flatMap(Backend.init)
+            ?? (key == nil && ClaudeCodeClient.executable != nil ? .subscription : .apiKey)
     }
 
-    var needsKey: Bool { apiKey == nil }
+    var needsKey: Bool { backend == .apiKey && apiKey == nil }
+
+    /// Switching ends the session: the two backends don't share a conversation.
+    func use(_ backend: Backend) {
+        guard backend != self.backend else { return }
+        end()
+        self.backend = backend
+        UserDefaults.standard.set(backend.rawValue, forKey: Self.backendKey)
+    }
 
     /// Saves to the Keychain first; the key is only used if that succeeds.
     func saveKey(_ key: String) throws {
@@ -39,6 +62,7 @@ final class ChatSession {
         guard !trimmed.isEmpty else { return }
         try Keychain.save(trimmed)
         apiKey = trimmed
+        use(.apiKey)
     }
 
     func forgetKey() {
@@ -49,8 +73,11 @@ final class ChatSession {
 
     /// Ends the session: cancels any request and drops every message from memory.
     func end() {
+        generation += 1
         task?.cancel()
         task = nil
+        claudeCode?.terminate()
+        claudeCode = nil
         turns = []
         history = []
         isBusy = false
@@ -61,43 +88,68 @@ final class ChatSession {
 
     func ask(_ question: String) {
         let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !question.isEmpty, !isBusy, let apiKey else { return }
+        guard !question.isEmpty, !isBusy, !needsKey else { return }
 
         turns.append(Turn(question: question))
         let turnIndex = turns.count - 1
-        let checkpoint = history.count
-        history.append(["role": "user", "content": question])
+        let generation = generation
         isBusy = true
 
-        let client = ClaudeClient(apiKey: apiKey, system: system)
         task = Task { [weak self] in
             guard let self else { return }
+            var failure: String?
             do {
-                var stop: String?
-                repeat {
-                    let result = try await client.stream(messages: history) { event in
-                        self.apply(event, to: turnIndex)
-                    }
-                    stop = result.stopReason
-                    if stop == "refusal" { break }
-                    // Replay the assistant turn verbatim (thinking + tool blocks included).
-                    history.append(["role": "assistant", "content": result.content])
-                } while stop == "pause_turn"   // server-side tool loop wants to keep going
-
+                let stop = switch backend {
+                case .subscription: try await askClaudeCode(question, turnIndex: turnIndex)
+                case .apiKey: try await askAPI(question, turnIndex: turnIndex)
+                }
                 if stop == "refusal" {
-                    history.removeSubrange(checkpoint...)
-                    update(turnIndex) { $0.error = "Claude declined to answer this one." }
+                    failure = "Claude declined to answer this one."
                 } else if stop == "max_tokens" {
-                    update(turnIndex) { $0.error = "Answer was cut off (hit max tokens)." }
+                    failure = "Answer was cut off (hit max tokens)."
                 }
             } catch {
-                // Roll back so the next question starts from a clean, valid history.
-                history.removeSubrange(checkpoint...)
                 let cancelled = error is CancellationError || (error as? URLError)?.code == .cancelled
-                update(turnIndex) { $0.error = cancelled ? "Stopped." : error.localizedDescription }
+                failure = cancelled ? "Stopped." : error.localizedDescription
             }
-            update(turnIndex) { $0.done = true; $0.status = nil }
+            guard generation == self.generation else { return }   // session was ended mid-stream
+            update(turnIndex) { $0.error = failure; $0.done = true; $0.status = nil }
             isBusy = false
+        }
+    }
+
+    /// Subscription: the Claude Code process keeps the conversation, so only the new question is sent.
+    private func askClaudeCode(_ question: String, turnIndex: Int) async throws -> String? {
+        let client = claudeCode ?? ClaudeCodeClient(system: system)
+        claudeCode = client
+        return try await client.send(question) { [weak self] event in
+            self?.apply(event, to: turnIndex)
+        }
+    }
+
+    /// API key: the full history is replayed on every request.
+    private func askAPI(_ question: String, turnIndex: Int) async throws -> String? {
+        guard let apiKey else { return nil }
+        let checkpoint = history.count
+        history.append(["role": "user", "content": question])
+        let client = ClaudeClient(apiKey: apiKey, system: system)
+        do {
+            var stop: String?
+            repeat {
+                let result = try await client.stream(messages: history) { event in
+                    self.apply(event, to: turnIndex)
+                }
+                stop = result.stopReason
+                if stop == "refusal" { break }
+                // Replay the assistant turn verbatim (thinking + tool blocks included).
+                history.append(["role": "assistant", "content": result.content])
+            } while stop == "pause_turn"   // server-side tool loop wants to keep going
+            if stop == "refusal" { history.removeSubrange(min(checkpoint, history.count)...) }
+            return stop
+        } catch {
+            // Roll back so the next question starts from a clean, valid history.
+            history.removeSubrange(min(checkpoint, history.count)...)
+            throw error
         }
     }
 
@@ -126,7 +178,10 @@ final class ChatSession {
         return """
         You are a quick-lookup assistant inside a pop-up search box. Today is \(date).
         Answer directly and concisely — lead with the answer, then only the detail that helps. \
-        Use short paragraphs or bullet lists; avoid headings. \
+        Your reply is rendered as GitHub-flavored Markdown: use short paragraphs and bullet lists, \
+        a table when comparing things across several attributes, and fenced code blocks tagged with \
+        the language for any code or commands. Keep headings for long, multi-part answers. \
+        LaTeX is not rendered, so write math with plain Unicode symbols. \
         Search the web when the question depends on current or specific facts you aren't sure of.
         """
     }

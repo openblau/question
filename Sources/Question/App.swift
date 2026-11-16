@@ -21,6 +21,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var setKeyItem: NSMenuItem!
     private var forgetKeyItem: NSMenuItem!
     private var loginItem: NSMenuItem!
+    private var subscriptionItem: NSMenuItem!
+    private var apiKeyItem: NSMenuItem!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         panel = PanelController()
@@ -34,6 +36,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                               action: #selector(openPanel), keyEquivalent: "")
         menu.addItem(open)
         menu.addItem(.separator())
+        let header = NSMenuItem(title: "Answer With", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        subscriptionItem = NSMenuItem(title: "Claude Subscription", action: #selector(useSubscription), keyEquivalent: "")
+        apiKeyItem = NSMenuItem(title: "Anthropic API Key", action: #selector(useAPIKey), keyEquivalent: "")
+        menu.addItem(subscriptionItem)
+        menu.addItem(apiKeyItem)
+        menu.addItem(.separator())
         setKeyItem = NSMenuItem(title: "Set API Key…", action: #selector(setKey), keyEquivalent: "")
         forgetKeyItem = NSMenuItem(title: "Forget API Key", action: #selector(forgetKey), keyEquivalent: "")
         menu.addItem(setKeyItem)
@@ -44,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Question", action: #selector(quit), keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
+        header.target = nil
         menu.autoenablesItems = false
         menu.delegate = self
         statusItem.menu = menu
@@ -75,7 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let hasKey = !panel.session.needsKey
+        let hasKey = panel.session.apiKey != nil
+        subscriptionItem.state = panel.session.backend == .subscription ? .on : .off
+        apiKeyItem.state = panel.session.backend == .apiKey ? .on : .off
         setKeyItem.title = hasKey ? "Change API Key…" : "Set API Key…"
         forgetKeyItem.isEnabled = hasKey
         switch SMAppService.mainApp.status {
@@ -87,9 +100,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openPanel() { panel.show() }
 
+    /// Uses the Claude Code login, so there's nothing to enter here.
+    @objc private func useSubscription() {
+        guard ClaudeCodeClient.executable != nil else {
+            let alert = NSAlert()
+            alert.messageText = "Claude Code Not Found"
+            alert.informativeText = "Question uses your Claude subscription through Claude Code. "
+                + "Install it from claude.com/claude-code, run `claude` in Terminal to log in, then relaunch Question."
+            NSApp.activate()
+            alert.runModal()
+            return
+        }
+        panel.session.use(.subscription)
+    }
+
+    @objc private func useAPIKey() {
+        panel.session.use(.apiKey)
+        if panel.session.needsKey { setKey() }
+    }
+
     @objc private func setKey() {
         let alert = NSAlert()
-        alert.messageText = panel.session.needsKey ? "Set Anthropic API Key" : "Change Anthropic API Key"
+        alert.messageText = panel.session.apiKey == nil ? "Set Anthropic API Key" : "Change Anthropic API Key"
         alert.informativeText = "Create a key at console.anthropic.com → Settings → API Keys. It's stored in your macOS Keychain."
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         field.placeholderString = "sk-ant-…"
