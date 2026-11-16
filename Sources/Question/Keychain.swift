@@ -22,6 +22,11 @@ enum Keychain {
          kSecAttrSynchronizable as String: false]   // never sync to iCloud Keychain
     }
 
+    /// Whether a key is saved. Asks only for attributes, so macOS never shows a password prompt for it.
+    static var exists: Bool {
+        SecItemCopyMatching(baseQuery as CFDictionary, nil) == errSecSuccess
+    }
+
     static func read() -> String? {
         var query = baseQuery
         query[kSecReturnData as String] = true

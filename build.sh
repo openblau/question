@@ -27,7 +27,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$APP"
+# Sign with a stable identity when one exists. An ad-hoc signature changes on every build, so
+# macOS would ask for the login password again each time the app reads its key from the Keychain.
+# Override with CODESIGN_IDENTITY; "-" forces ad-hoc.
+IDENTITY="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -nE 's/.*"((Developer ID Application|Apple Development): [^"]+)".*/\1/p' | head -1)}"
+codesign --force --sign "${IDENTITY:--}" "$APP"
 echo "Built $APP"
 
 # Install to /Applications so the login item points at a stable location.
