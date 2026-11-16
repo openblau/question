@@ -59,8 +59,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
+        installEditMenu()
         enableLoginItemOnFirstLaunch()
         if panel.session.needsKey { setKey() }
+    }
+
+    /// A menu-bar-only app has no menu bar, but ⌘V, ⌘C, ⌘X, ⌘A and ⌘Z are still routed
+    /// through the main menu's key equivalents. Without an Edit menu they do nothing.
+    private func installEditMenu() {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let main = NSMenu()
+        let item = NSMenuItem()
+        item.submenu = edit
+        main.addItem(item)
+        NSApp.mainMenu = main
     }
 
     // MARK: Login item
@@ -86,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let hasKey = panel.session.apiKey != nil
+        let hasKey = panel.session.apiKey != nil || Keychain.exists
         subscriptionItem.state = panel.session.backend == .subscription ? .on : .off
         apiKeyItem.state = panel.session.backend == .apiKey ? .on : .off
         setKeyItem.title = hasKey ? "Change API Key…" : "Set API Key…"
@@ -121,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func setKey() {
         let alert = NSAlert()
-        alert.messageText = panel.session.apiKey == nil ? "Set Anthropic API Key" : "Change Anthropic API Key"
+        alert.messageText = !Keychain.exists ? "Set Anthropic API Key" : "Change Anthropic API Key"
         alert.informativeText = "Create a key at console.anthropic.com → Settings → API Keys. It's stored in your macOS Keychain."
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
         field.placeholderString = "sk-ant-…"

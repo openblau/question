@@ -38,12 +38,14 @@ final class ChatSession {
     @ObservationIgnored private var generation = 0
 
     init() {
-        let key = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"].flatMap { $0.isEmpty ? nil : $0 }
-            ?? Keychain.read()
-        apiKey = key
+        let environmentKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"].flatMap { $0.isEmpty ? nil : $0 }
         // First launch: keep using a key that's already set up, otherwise prefer the subscription.
-        backend = UserDefaults.standard.string(forKey: Self.backendKey).flatMap(Backend.init)
-            ?? (key == nil && ClaudeCodeClient.executable != nil ? .subscription : .apiKey)
+        let hasKey = environmentKey != nil || Keychain.exists
+        let backend = UserDefaults.standard.string(forKey: Self.backendKey).flatMap(Backend.init)
+            ?? (!hasKey && ClaudeCodeClient.executable != nil ? .subscription : .apiKey)
+        self.backend = backend
+        // Only touch the key itself when it will be used, so subscription users never see a Keychain prompt.
+        apiKey = backend == .apiKey ? environmentKey ?? Keychain.read() : nil
     }
 
     var needsKey: Bool { backend == .apiKey && apiKey == nil }
@@ -53,6 +55,10 @@ final class ChatSession {
         guard backend != self.backend else { return }
         end()
         self.backend = backend
+        if backend == .apiKey, apiKey == nil {
+            apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"].flatMap { $0.isEmpty ? nil : $0 }
+                ?? Keychain.read()
+        }
         UserDefaults.standard.set(backend.rawValue, forKey: Self.backendKey)
     }
 
