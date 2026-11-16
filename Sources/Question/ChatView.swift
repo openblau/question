@@ -22,9 +22,8 @@ struct ChatView: View {
         }
         .frame(width: PanelController.width)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(VisualEffectBackground())
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.08)))
+        .background(PanelBackground())
+        .clipShape(PanelBackground.shape)
         .onExitCommand(perform: onEndSession)
         .onChange(of: session.turns.isEmpty) { _, empty in onExpandedChange(!empty) }
         .onChange(of: session.focusTick) { focused = true }
@@ -161,6 +160,25 @@ private struct TurnView: View {
                 .font(.caption)
             }
         }
+    }
+}
+
+/// Liquid Glass on macOS 26 and later, the classic blur before that.
+/// Dragging any part of it that isn't a control moves the panel.
+private struct PanelBackground: View {
+    static let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+
+    var body: some View {
+        Group {
+            if #available(macOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: Self.shape)
+            } else {
+                VisualEffectBackground().overlay(Self.shape.strokeBorder(.white.opacity(0.08)))
+            }
+        }
+        .contentShape(Self.shape)
+        .gesture(WindowDragGesture())
+        .allowsWindowActivationEvents(true)
     }
 }
 

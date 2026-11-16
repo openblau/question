@@ -13,8 +13,14 @@ final class PanelController: NSObject, NSWindowDelegate {
     static let compactHeight: CGFloat = 64
     static let expandedHeight: CGFloat = 560
 
+    private static let positionKey = "panelTopLeft"
+
     let session = ChatSession()
     private let panel: QueryPanel
+    /// True while we move the panel ourselves, so only the user's drags are remembered.
+    private var positioning = false
+    /// Where the user last dragged the panel's top-left corner.
+    private var savedTopLeft = UserDefaults.standard.string(forKey: PanelController.positionKey).map(NSPointFromString)
 
     override init() {
         panel = QueryPanel(
@@ -48,12 +54,20 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func show() {
+        let height = session.turns.isEmpty ? Self.compactHeight : Self.expandedHeight
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
-        if let visible = screen?.visibleFrame {
-            let height = session.turns.isEmpty ? Self.compactHeight : Self.expandedHeight
-            let top = visible.maxY - visible.height * 0.18
-            panel.setFrame(NSRect(x: visible.midX - Self.width / 2, y: top - height,
-                                  width: Self.width, height: height), display: true)
+        var topLeft: NSPoint?
+        // Reopen where the user left it, as long as the input bar is still on a screen.
+        if let savedTopLeft {
+            let bar = NSRect(x: savedTopLeft.x, y: savedTopLeft.y - Self.compactHeight,
+                             width: Self.width, height: Self.compactHeight)
+            if NSScreen.screens.contains(where: { $0.visibleFrame.contains(bar) }) { topLeft = savedTopLeft }
+        }
+        if topLeft == nil, let visible = screen?.visibleFrame {
+            topLeft = NSPoint(x: visible.midX - Self.width / 2, y: visible.maxY - visible.height * 0.18)
+        }
+        if let topLeft {
+            move(to: NSRect(x: topLeft.x, y: topLeft.y - height, width: Self.width, height: height), animate: false)
         }
         panel.makeKeyAndOrderFront(nil)
         session.focusTick += 1
@@ -76,7 +90,20 @@ final class PanelController: NSObject, NSWindowDelegate {
         guard frame.height != height else { return }
         frame.origin.y = frame.maxY - height   // grow downward, keep the input bar in place
         frame.size.height = height
-        panel.setFrame(frame, display: true, animate: panel.isVisible)
+        move(to: frame, animate: panel.isVisible)
+    }
+
+    private func move(to frame: NSRect, animate: Bool) {
+        positioning = true
+        panel.setFrame(frame, display: true, animate: animate)
+        positioning = false
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard !positioning else { return }
+        let topLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        savedTopLeft = topLeft
+        UserDefaults.standard.set(NSStringFromPoint(topLeft), forKey: Self.positionKey)
     }
 
     // Clicking elsewhere hides the panel but keeps the session (⌥Space brings it back).
