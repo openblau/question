@@ -5,6 +5,7 @@ struct ChatView: View {
     let session: ChatSession
     let onEndSession: () -> Void
     let onExpandedChange: (Bool) -> Void
+    let onInputHeightChange: (CGFloat) -> Void
 
     @State private var input = ""
     @State private var keyError: String?
@@ -42,7 +43,9 @@ struct ChatView: View {
                 if session.needsKey {
                     SecureField("Paste your Anthropic API key and press Return", text: $input)
                 } else {
-                    TextField(session.turns.isEmpty ? "Ask anything…" : "Follow up…", text: $input)
+                    // Grows with multi-line text (pasted, or ⌥Return); Return still sends.
+                    TextField(session.turns.isEmpty ? "Ask anything…" : "Follow up…", text: $input, axis: .vertical)
+                        .lineLimit(1...PanelController.maxInputLines)
                 }
             }
             .textFieldStyle(.plain)
@@ -73,7 +76,10 @@ struct ChatView: View {
                 .help("Nothing is saved. Esc ends the session and erases it from memory.")
         }
         .padding(.horizontal, 20)
-        .frame(height: PanelController.compactHeight)
+        .padding(.vertical, 12)
+        .frame(minHeight: PanelController.compactHeight)
+        .fixedSize(horizontal: false, vertical: true)   // take the height the text needs, not the window's
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onInputHeightChange($0) }
     }
 
     private func submit() {

@@ -12,6 +12,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     static let width: CGFloat = 720
     static let compactHeight: CGFloat = 64
     static let expandedHeight: CGFloat = 560
+    static let maxInputLines = 8
 
     private static let positionKey = "panelTopLeft"
 
@@ -19,6 +20,8 @@ final class PanelController: NSObject, NSWindowDelegate {
     private let panel: QueryPanel
     /// True while we move the panel ourselves, so only the user's drags are remembered.
     private var positioning = false
+    /// Height of the input bar, which grows with multi-line text.
+    private var inputHeight = PanelController.compactHeight
     /// Where the user last dragged the panel's top-left corner.
     private var savedTopLeft = UserDefaults.standard.string(forKey: PanelController.positionKey).map(NSPointFromString)
 
@@ -43,7 +46,11 @@ final class PanelController: NSObject, NSWindowDelegate {
         let root = ChatView(
             session: session,
             onEndSession: { [weak self] in self?.endSession() },
-            onExpandedChange: { [weak self] expanded in self?.resize(expanded: expanded) })
+            onExpandedChange: { [weak self] _ in self?.resize(animate: true) },
+            onInputHeightChange: { [weak self] height in
+                self?.inputHeight = max(height, Self.compactHeight)
+                self?.resize(animate: false)
+            })
         let host = NSHostingView(rootView: root)
         host.sizingOptions = []
         panel.contentView = host
@@ -54,7 +61,7 @@ final class PanelController: NSObject, NSWindowDelegate {
     }
 
     func show() {
-        let height = session.turns.isEmpty ? Self.compactHeight : Self.expandedHeight
+        let height = targetHeight
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         var topLeft: NSPoint?
         // Reopen where the user left it, as long as the input bar is still on a screen.
@@ -81,16 +88,21 @@ final class PanelController: NSObject, NSWindowDelegate {
     func endSession() {
         session.end()
         hide()
-        resize(expanded: false)
+        resize(animate: true)
     }
 
-    private func resize(expanded: Bool) {
-        let height = expanded ? Self.expandedHeight : Self.compactHeight
+    /// Just the input bar before the first question, the full panel after.
+    private var targetHeight: CGFloat {
+        session.turns.isEmpty ? inputHeight : max(Self.expandedHeight, inputHeight + 240)
+    }
+
+    private func resize(animate: Bool) {
+        let height = targetHeight
         var frame = panel.frame
         guard frame.height != height else { return }
         frame.origin.y = frame.maxY - height   // grow downward, keep the input bar in place
         frame.size.height = height
-        move(to: frame, animate: panel.isVisible)
+        move(to: frame, animate: animate && panel.isVisible)
     }
 
     private func move(to frame: NSRect, animate: Bool) {
